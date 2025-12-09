@@ -14,7 +14,7 @@ if file.exists():
 else:
     df = pd.DataFrame(columns=["レース名","馬名","人気","オッズ","斤量","脚質","着順","俺の評価"])
 
-st.write(f"### 俺の手入力データ：**{len(df)}頭**　（50頭超えたらマジで神）")
+st.write(f"### 俺の手入力データ：**{len(df)}頭**　（50頭超えたら神になる）")
 
 tab1, tab2, tab3 = st.tabs(["今日の予想", "俺の目利き入力", "舜を俺にする"])
 
@@ -28,7 +28,7 @@ with tab1:
                 name = c1.text_input("馬名", key=f"n{i}")
                 pop  = c2.number_input("人気",1,18, key=f"p{i}")
                 odds = c3.number_input("オッズ",1.0,999.0, key=f"o{i}")
-                weight = c4.number_input("斤量",40.0,60.0, key=f"w{i}")
+                weight = c4.number_input("斤量",40.0,60.0,57.0,0.5, key=f"w{i}")
                 pace = c5.selectbox("脚質",["逃げ","先行","差し","追込"], key=f"pa{i}")
                 if name:
                     horses.append({"馬名":name,"人気":pop,"オッズ":odds,"斤量":weight,"脚質":pace})
@@ -55,20 +55,24 @@ with tab2:
     st.subheader("俺の目利きでデータ入力（1レース30秒）")
     with st.form("input", clear_on_submit=True):
         race = st.text_input("レース名", "今日の東京11R")
+        new = []  # ← ここでnewを先に定義
         for i in range(8):
             c1,c2,c3,c4,c5,c6 = st.columns(6)
             name = c1.text_input("馬名", key=f"m{i}")
-            rank = c2.number_input("着順",1,18,99, key=f"r{i}")
+            # ここがバグの元凶だった！ value=99 → value=18に変更
+            rank = c2.number_input("着順", min_value=1, max_value=18, value=18, key=f"r{i}")
             pop  = c3.number_input("人気",1,18, key=f"p{i}")
             odds = c4.number_input("オッズ",1.0,999.0, key=f"o{i}")
-            weight = c5.number_input("斤量",40.0,60.0, key=f"w{i}")
+            weight = c5.number_input("斤量",40.0,60.0,57.0,0.5, key=f"w{i}")
             eval = c6.slider("俺の評価",0,10,5, key=f"e{i}")
             if name:
-                df = pd.concat([df, pd.DataFrame([{
+                new.append({
                     "レース名":race,"馬名":name,"人気":pop,"オッズ":odds,
                     "斤量":weight,"脚質":"不明","着順":rank,"俺の評価":eval
-                }])], ignore_index=True)
+                })
         if st.form_submit_button("俺の目利きを舜に刻む！！"):
+            global df
+            df = pd.concat([df, pd.DataFrame(new)], ignore_index=True)
             df.to_csv("ore_no_meikiki.csv", index=False)
             st.success(f"刻み込み完了！現在 **{len(df)}頭**")
             st.rerun()
