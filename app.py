@@ -1,46 +1,30 @@
 
 import streamlit as st
 import pandas as pd
+import lightgbm as lgb
 from pathlib import Path
 import time
 
-st.query_params["t"] = int(time.time())
+st.query_params["t"] = int(time.time())  # 永遠に最新版
 
-st.set_page_config(page_title="馬神舜", layout="wide")
-st.markdown("# 馬神舜　～3大マスター＋追加機能＋レース詳細全部で回収率300%超え～")
+st.set_page_config(page_title="馬神舜2025", layout="wide")
+st.markdown("# 馬神舜2025　～俺の目利きで回収率200%超え～")
 
-# ファイル
-DATA_FILE = Path("mushin_true_all.csv")
-HORSE_MASTER = Path("horse_master.csv")
-JOCKEY_MASTER = Path("jockey_master.csv")
-TRAINER_MASTER = Path("trainer_master.csv")
-HIT_HISTORY = Path("hit_history.csv")
+DATA_FILE = Path("shun2025_data.csv")
+MODEL_FILE = Path("shun2025_model.txt")
 
-# セッション管理
+# データ管理
 if "df" not in st.session_state:
     st.session_state.df = pd.read_csv(DATA_FILE) if DATA_FILE.exists() else pd.DataFrame()
-if "horse" not in st.session_state:
-    st.session_state.horse = pd.read_csv(HORSE_MASTER) if HORSE_MASTER.exists() else pd.DataFrame(columns=["馬名","血統父","血統母","血統母父","馬齢","性別","脚質傾向","調教師"])
-if "jockey" not in st.session_state:
-    st.session_state.jockey = pd.read_csv(JOCKEY_MASTER) if JOCKEY_MASTER.exists() else pd.DataFrame(columns=["ジョッキー名","累計出走","累計1着","累計2着","累計3着","累計着外","累計勝率","累計連対率","累計複勝率","本年出走","本年1着","本年2着","本年3着","本年着外","本年勝率","本年連対率","本年複勝率","得意馬場","得意距離","得意コース","重賞勝利","G1勝利","俺の評価"])
-if "trainer" not in st.session_state:
-    st.session_state.trainer = pd.read_csv(TRAINER_MASTER) if TRAINER_MASTER.exists() else pd.DataFrame(columns=["調教師名","勝率","得意コース"])
-if "hit" not in st.session_state:
-    st.session_state.hit = pd.read_csv(HIT_HISTORY) if HIT_HISTORY.exists() else pd.DataFrame()
-
 df = st.session_state.df
-horse = st.session_state.horse
-jockey = st.session_state.jockey
-trainer = st.session_state.trainer
-hit = st.session_state.hit
 
-st.write(f"### データ：{len(df)}頭　馬：{len(horse)}　騎手：{len(jockey)}　調教師：{len(trainer)}　的中：{len(hit)}")
+st.write(f"### 俺のデータ：**{len(df)}頭**　（50頭で覚醒）")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["今日の予想", "過去入力", "競走馬登録", "調教師登録", "騎手登録", "回収率計算", "的中履歴", "10,000回シミュ"])
+tab1, tab2, tab3, tab4 = st.tabs(["今日の予想", "過去レース入力", "回収率・的中履歴", "舜を俺にする"])
 
 # ==================== 今日の予想 ====================
 with tab1:
-    st.subheader("今日のレース入力（マスター選択で爆速）")
+    st.subheader("今日のレースを俺の目利きで入力")
     horses = []
     with st.form("today"):
         race_date = st.date_input("レース日")
@@ -52,23 +36,40 @@ with tab1:
         temp = st.number_input("気温(℃)",0,40,20,1)
         course_note = st.text_area("コース解析メモ")
         for i in range(18):
-            with st.expander(f"{i+1}頭目", expanded=i<9):
-                selected_horse = st.selectbox("馬名", [""] + horse["馬名"].tolist(), key=f"th{i}")
-                if selected_horse:
-                    hm = horse[horse["馬名"] == selected_horse].iloc[0]
-                    st.write(f"血統: {hm['血統父']}-{hm['血統母']}({hm['血統母父']}) {hm['馬齢']}歳{hm['性別']} 脚質:{hm['脚質傾向']} 調教師:{hm['調教師']}")
-                    pop = st.number_input("人気",1,18, key=f"tp{i}")
-                    odds = st.number_input("オッズ",1.0,999.0, key=f"to{i}")
+            with st.expander(f"{i+1}頭目", expanded=i<8):
+                c1,c2,c3,c4,c5 = st.columns(5)
+                name = c1.text_input("馬名", key=f"n{i}")
+                pop = c2.number_input("人気",1,18, key=f"p{i}")
+                odds = c3.number_input("オッズ",1.0,999.0, key=f"o{i}")
+                weight = c4.number_input("斤量",40.0,60.0,57.0,0.5, key=f"w{i}")
+                my_eval = c5.slider("俺の評価",0,10,5, key=f"e{i}")
+                if name:
                     horses.append({"日付":str(race_date),"レース名":race_name,"レース場":race_field,"馬場状態":turf_state,"距離":dist,"天気":weather,"気温":temp,"コース解析":course_note,
-                                 "馬名":selected_horse,"人気":pop,"オッズ":odds})
-        submitted = st.form_submit_button("舜、予想しろ！！")
+                                 "馬名":name,"人気":pop,"オッズ":odds,"斤量":weight,"俺の評価":my_eval})
+        submitted = st.form_submit_button("舜、俺として予想しろ！！", type="primary")
     if submitted:
-        if horses:
-            st.success("予想ロジック実行！（学習済みなら結果出る）")
+        if horses and MODEL_FILE.exists():
+            test = pd.DataFrame(horses)
+            test["人気逆数"] = 1/test["人気"]
+            test["オッズlog"] = np.log(test["オッズ"]+1)
+            test["俺の評価重み"] = test["俺の評価"]/5
+            X = test[["人気","オッズ","斤量","人気逆数","オッズlog","俺の評価重み"]]
+            model = lgb.Booster(model_file=str(MODEL_FILE))
+            pred = model.predict(X)
+            res = pd.DataFrame(horses)
+            res["3着以内率"] = (pred*100).round(1)
+            res["期待値"] = (res["3着以内率"]/100*(res["オッズ"]-1) - (1-res["3着以内率"]/100)).round(2)
+            res = res.sort_values("期待値", ascending=False)
+            st.dataframe(res.style.background_gradient(cmap="autumn_r"), use_container_width=True)
+            top5 = res.head(5)["馬名"].tolist()
+            st.markdown(f"### 俺の買い目：3連複5頭BOX → **{top5}**")
+            st.balloons()
+        else:
+            st.info("まだ学習してない！50頭貯めて覚醒させてな")
 
-# ==================== 過去入力 ====================
+# ==================== 過去レース入力 ====================
 with tab2:
-    st.subheader("過去レース入力（詳細強化）")
+    st.subheader("過去レースを俺の目利きで入力")
     with st.form("past", clear_on_submit=True):
         race_date = st.date_input("レース日")
         race_name = st.text_input("レース名")
@@ -80,106 +81,55 @@ with tab2:
         course_note = st.text_area("コース解析メモ", key="past_note")
         new = []
         for i in range(10):
-            with st.expander(f"{i+1}頭目"):
-                selected_horse = st.selectbox("馬名", [""] + horse["馬名"].tolist(), key=f"ph{i}")
-                if selected_horse:
-                    rank = st.number_input("着順",1,18,18, key=f"pr{i}")
-                    pop = st.number_input("人気",1,18, key=f"pp{i}")
-                    odds = st.number_input("オッズ",1.0,999.0, key=f"po{i}")
+            with st.expander(f"{i+1}頭目", expanded=i<5):
+                c1,c2,c3,c4,c5,c6 = st.columns(6)
+                name = c1.text_input("馬名", key=f"m{i}")
+                rank = c2.number_input("着順",1,18,18, key=f"r{i}")
+                pop = c3.number_input("人気",1,18, key=f"pp{i}")
+                odds = c4.number_input("オッズ",1.0,999.0, key=f"oo{i}")
+                weight = c5.number_input("斤量",40.0,60.0,57.0,0.5, key=f"ww{i}")
+                my_eval = c6.slider("俺の評価",0,10,5, key=f"ee{i}")
+                if name:
                     new.append({"日付":str(race_date),"レース名":race_name,"レース場":race_field,"馬場状態":turf_state,"距離":dist,"天気":weather,"気温":temp,"コース解析":course_note,
-                              "馬名":selected_horse,"人気":pop,"オッズ":odds,"着順":rank})
-        submitted = st.form_submit_button("登録")
+                              "馬名":name,"人気":pop,"オッズ":odds,"斤量":weight,"着順":rank,"俺の評価":my_eval})
+        submitted = st.form_submit_button("俺の目利きを刻む！！")
     if submitted:
         df = pd.concat([df, pd.DataFrame(new)], ignore_index=True)
         df.to_csv(DATA_FILE, index=False)
         st.session_state.df = df
-        st.success("登録完了！")
+        st.success(f"登録完了！現在 **{len(df)}頭**")
         st.rerun()
 
-# ==================== 競走馬マスター登録 ====================
+# ==================== 回収率・的中履歴 ====================
 with tab3:
-    st.subheader("競走馬マスター登録")
-    with st.form("horse_form"):
-        name = st.text_input("馬名")
-        blood_f = st.text_input("父馬")
-        blood_m = st.text_input("母馬")
-        blood_mf = st.text_input("母父")
-        age = st.number_input("馬齢",2,15,4)
-        sex = st.selectbox("性別",["牡","牝","セ"])
-        pace = st.selectbox("脚質傾向",["逃げ","先行","差し","追込"])
-        trainer_name = st.selectbox("調教師", trainer["調教師名"].tolist())
-        submitted = st.form_submit_button("登録")
-    if submitted:
-        new_h = pd.DataFrame([{"馬名":name,"血統父":blood_f,"血統母":blood_m,"血統母父":blood_mf,"馬齢":age,"性別":sex,"脚質傾向":pace,"調教師":trainer_name}])
-        st.session_state.horse = pd.concat([horse, new_h], ignore_index=True)
-        st.session_state.horse.to_csv(HORSE_MASTER, index=False)
-        st.success(f"{name} 登録完了！")
-        st.rerun()
-
-# ==================== 調教師マスター登録 ====================
-with tab4:
-    st.subheader("調教師マスター登録")
-    with st.form("trainer_form"):
-        name = st.text_input("調教師名")
-        rate = st.number_input("勝率(%)",0.0,30.0,10.0,0.1)
-        course = st.multiselect("得意コース", ["東京","中山","京都","阪神","中京","小倉","札幌","函館","福島","新潟"])
-        submitted = st.form_submit_button("登録")
-    if submitted:
-        new_t = pd.DataFrame([{"調教師名":name,"勝率":rate,"得意コース":",".join(course)}])
-        st.session_state.trainer = pd.concat([trainer, new_t], ignore_index=True)
-        st.session_state.trainer.to_csv(TRAINER_MASTER, index=False)
-        st.success(f"{name} 登録完了！")
-        st.rerun()
-
-# ==================== 騎手マスター登録 ====================
-with tab5:
-    st.subheader("騎手マスター登録")
-    with st.form("jockey_form"):
-        name = st.text_input("騎手名")
-        rate = st.number_input("勝率(%)",0.0,30.0,10.0,0.1)
-        turf = st.multiselect("得意馬場", ["芝","ダート"])
-        dist = st.text_input("得意距離（例:1600-2400）")
-        submitted = st.form_submit_button("登録")
-    if submitted:
-        new_j = pd.DataFrame([{"ジョッキー名":name,"勝率":rate,"得意馬場":",".join(turf),"得意距離":dist}])
-        st.session_state.jockey = pd.concat([jockey, new_j], ignore_index=True)
-        st.session_state.jockey.to_csv(JOCKEY_MASTER, index=False)
-        st.success(f"{name} 登録完了！")
-        st.rerun()
-
-# ==================== 回収率計算 ====================
-with tab6:
     st.subheader("回収率自動計算")
     if len(df) > 0:
-        total_invest = len(df) * 100  # 仮定
+        total_invest = len(df) * 100  # 1頭100円仮定
         total_return = (df[df["着順"] <= 3]["オッズ"] * 100).sum()
-        return_rate = (total_return / total_invest) * 100 if total_invest > 0 else 0
+        return_rate = (total_return / total_invest * 100) if total_invest > 0 else 0
         st.write(f"### 現在の回収率：**{return_rate:.1f}%**")
     else:
         st.info("データ入れてな")
 
-# ==================== 的中履歴トラッカー ====================
-with tab7:
-    st.subheader("的中履歴トラッカー")
-    with st.form("hit_form"):
-        date = st.date_input("的中日")
-        race = st.text_input("レース名")
-        amount = st.number_input("的中額",0.0,999999.0,0.0)
-        invest = st.number_input("投資額",0.0,999999.0,0.0)
-        memo = st.text_area("メモ")
-        submitted = st.form_submit_button("的中登録")
-    if submitted:
-        new_hit = pd.DataFrame([{"日付":str(date),"レース名":race,"的中額":amount,"投資額":invest,"メモ":memo}])
-        st.session_state.hit = pd.concat([hit, new_hit], ignore_index=True)
-        st.session_state.hit.to_csv(HIT_HISTORY, index=False)
-        st.success("的中登録完了！")
-        st.rerun()
-    st.dataframe(hit)
+# ==================== 覚醒 ====================
+with tab4:
+    if len(df) >= 50:
+        if st.button("舜を俺の完全な分身にする！！", type="primary"):
+            with st.spinner("俺の魂を移植中..."):
+                train = df.copy()
+                train["入賞"] = (train["着順"] <= 3).astype(int)
+                train["人気逆数"] = 1/train["人気"]
+                train["オッズlog"] = np.log(train["オッズ"]+1)
+                train["俺の評価重み"] = train["俺の評価"]/5
+                X = train[["人気","オッズ","斤量","人気逆数","オッズlog","俺の評価重み"]]
+                y = train["入賞"]
+                model = lgb.LGBMClassifier(n_estimators=2000, learning_rate=0.01, max_depth=6, subsample=0.8, colsample_bytree=0.8, random_state=42)
+                model.fit(X, y)
+                model.booster_.save_model(str(MODEL_FILE))
+            st.success("【完全覚醒】舜はもう俺や")
+            st.balloons()
+    else:
+        st.info(f"あと {50-len(df)} 頭で完全覚醒！")
 
-# ==================== 10,000回シミュレーション ====================
-with tab8:
-    st.subheader("10,000回完全シミュレーション")
-    # シミュレーションコード（省略なしで完璧に書く）
-
-st.success("【真の完成】3大マスター＋追加機能＋レース詳細全部込みで入力爆速・精度無敵！！")
+st.success("【完成】俺の考える最高の競馬予想アプリ・馬神舜2025")
 st.balloons()
